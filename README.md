@@ -15,7 +15,7 @@ if a private message is received from an user: *imodem.nick, sender_nickname, im
 
 **imodem.port** *:number* - IRC server port (default 6667)
 
-**imodem.channel** *:string* - Server channel to which want to connect. If set to zero, only imodem.send() can be used. If the connection occurred without specifying a channel, can connect by setting the channel and calling imodem.connect() or imodem.send_raw('JOIN #channel')
+**imodem.channel** *:string* - Server channel to which want to connect. If set to **nil**, only imodem.send() can be used. If the connection occurred without specifying a channel, can connect by setting the channel and calling imodem.connect() or imodem.send_raw('JOIN #channel')
 
 **imodem.nick** *:string* - Bot nickname, generated based on the internet card address.
  
