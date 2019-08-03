@@ -1,5 +1,6 @@
 # internet_modem
 Modem over IRC for OpenComputers
+
 Allows to create a bridge using the IRC server. Messages from an IRC server converts into a signal 'modem_message'.
 
 The signal from the server looks like this:
