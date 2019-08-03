@@ -1,23 +1,59 @@
-_G.imodem = {}
-imodem.channel = '#imodem'
-local server = 'irc.esper.net:6667'
-local internet = require('internet')
+local internet = require('component').internet
 local computer = require('computer')
-local event = require('event')
-local nick = 'x'..require('component').internet.address:sub(1, 8)
-local socket
 
-local function login()
-  if socket then socket:close() end
-  socket = internet.open(server)
-  socket:setTimeout(0.05)
-  imodem.send_raw('USER '..nick..' 0 * :'..nick)
-  imodem.send_raw('NICK '..nick)
+local imodem = {}
+
+-------------------------------------------------------------------------------
+
+imodem.server = 'irc.esper.net'
+imodem.port = 6667
+imodem.channel = '#imodem'
+imodem.nick = 'x'..internet.address:sub(1, 8)
+
+local socket
+local delay = 0.8
+local lastTime = computer.uptime()
+local lastPing = lastTime
+local isConnected = false
+
+imodem.isOnline = function()
+  if isConnected and
+     socket and
+     socket.finishConnect() and
+     computer.uptime()-lastPing < 65 then
+    return true
+  else
+    return false
+  end
+end
+
+imodem.connect = function()
+  if socket then socket.close() end
+  socket, reason = internet.connect(imodem.server, imodem.port)
+  if not socket then
+    return reason
+  end
+  return true
+end
+
+imodem.disconnect = function()
+  if socket then
+    imodem.send_raw('QUIT')
+    socket.close()
+  end
+  if isConnected then
+    isConnected = false
+  end
+  return true
 end
 
 imodem.send_raw = function(message)
-  socket:write(message..'\r\n')
-  socket:flush()
+  if socket then
+    socket.write(message..'\r\n')
+    return true
+  else
+    return false
+  end
 end
 
 imodem.broadcast = function(message)
@@ -29,54 +65,78 @@ imodem.broadcast = function(message)
   end
 end
 
-imodem.send = function(receiver, message)
-  if socket and receiver and message then
-    imodem.send_raw('PRIVMSG '..receiver..' :'..message)
+imodem.send = function(target, message)
+  if socket and target and message then
+    imodem.send_raw('PRIVMSG '..target..' :'..message)
     return true
   else
     return false
   end
 end
 
-imodem.stop = function()
-  if imodem.timer then
-    if socket then
-      imodem.send_raw('QUIT')
-      socket:close()
+if not package.loaded.imodem then
+  local pullSignal = computer.pullSignal
+  computer.pullSignal = function(...)
+    local e = {pullSignal(...)}
+
+    if isConnected and e[1] == 'internet_ready' then
+      local line = socket.read()
+      if line and line ~= '' then
+        lastPing = computer.uptime()
+        local ok, prefix = line:match('^(:(%S+) )')
+        if prefix then prefix = prefix:match('^[^!]+') end
+        if ok then line = line:sub(#ok+1) end
+        local ok, command = line:match('^(([^:]%S*))')
+        if ok then line = line:sub(#ok+1) end
+        local ok, source = line:match('^( ([^:]%S*))')
+        if ok then line = line:sub(#ok+1) end
+        repeat
+          ok = line:match('^( ([^:]%S*))')
+          if ok then line = line:sub(#ok+1) end
+        until not ok
+        local message = line:match('^ :(.*)$')
+        if (command == '001' or command == '404') and imodem.channel then
+          imodem.send_raw('JOIN '..imodem.channel)
+        elseif command == '433' or command == '436' then
+          imodem.nick = imodem.nick..string.char(math.random(97,122))
+          imodem.send_raw('NICK '..imodem.nick)
+        elseif command == 'PING' then
+          imodem.send_raw('PONG :'..message)
+        elseif command == 'PONG' then
+          lastPing = computer.uptime()
+        elseif command == 'PRIVMSG' then
+          computer.pushSignal('modem_message', imodem.nick, prefix, source, 0, message)
+        end
+      end
     end
-    event.cancel(imodem.timer)
-    imodem = nil
+
+    if delay < computer.uptime()-lastTime then
+
+      if not isConnected and socket and socket.finishConnect() then
+        isConnected = true
+        imodem.send_raw('USER '..imodem.nick..' . . :'..imodem.nick)
+        imodem.send_raw('NICK '..imodem.nick)
+      end
+
+      if isConnected then
+        if computer.uptime()-lastPing > 60 then
+          imodem.send_raw('PING :'..imodem.nick)
+        end
+        if not socket or 
+        (socket and not socket.finishConnect()) or
+        computer.uptime()-lastPing > 90 then
+          isConnected = false
+          imodem.connect()
+        end
+      end
+
+      lastTime = computer.uptime()
+    end
+
+    return table.unpack(e)
   end
 end
 
-imodem.timer = event.timer(0.5, function()
-  if not socket then login() end
-  repeat
-    local ok, line = pcall(socket.read, socket)
-    if ok then
-      if not line then login() end
-      local match, prefix = line:match('^(:(%S+) )')
-      if prefix then prefix = prefix:match('^[^!]+') end
-      if match then line = line:sub(#match+1) end
-      local match, command = line:match('^(([^:]%S*))')
-      if match then line = line:sub(#match+1) end
-      repeat
-        local match = line:match('^( ([^:]%S*))')
-        if match then
-          line = line:sub(#match+1)
-        end
-      until not match
-      local message = line:match('^ :(.*)$')
-      if command == '001' or command == '404' then
-        imodem.send_raw('JOIN '..imodem.channel)
-      elseif command == '433' or command == '436' then
-        nick = nick..string.char(math.random(97,122))
-        imodem.send_raw('NICK '..nick)
-      elseif command == 'PING' then
-        imodem.send_raw('PONG :'..message)
-      elseif command == 'PRIVMSG' then
-        computer.pushSignal('modem_message', nick, prefix, 0, 0, message)
-      end
-    end
-  until not ok
-end, math.huge)
+-------------------------------------------------------------------------------
+
+return imodem
